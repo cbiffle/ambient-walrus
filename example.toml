@@ -1,7 +1,11 @@
-[controls.backlight]
-driver = {kind = "backlight", device = "intel_backlight"}
+[sensor]
+driver = {kind = "iio-sensor-proxy"}
+input = {hi = 3300}
 
-[controls.keyboard]
-driver = {kind = "thinkpad-keyboard-backlight"}
-input = {hi = 0.5}
-max-behavior = "off"
+[controls.backlight]
+driver = {kind = "backlight", device = "amdgpu_bl1"}
+
+#[controls.keyboard]
+#driver = {kind = "thinkpad-keyboard-backlight"}
+#input = {hi = 0.5}
+#max-behavior = "off"
