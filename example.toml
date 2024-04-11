@@ -1,0 +1,7 @@
+[controls.backlight]
+driver = {kind = "backlight", device = "intel_backlight"}
+
+[controls.keyboard]
+driver = {kind = "thinkpad-keyboard-backlight"}
+input = {hi = 0.5}
+max-behavior = "off"

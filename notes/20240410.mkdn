@@ -1,0 +1,93 @@
+Assume that n sensors are mapped to a common scale and blended in some manner to
+produce a single "illuminance" number.
+
+This gets mapped to some number of brightness controls -- e.g. display
+backlight, keyboard backlight, heck even power LED, sure why not.
+
+Generally speaking, brightness controls correlate with illumination levels. As
+it gets darker, the brightness gets turned down. However, there are some classes
+of lights that we actually want to turn all the way off above a certain
+illumination level -- keyboard backlight, for instance.
+
+So a possible configuration for the program might be, expressed in sigh toml,
+
+```
+[sensors.ambient]
+source = {kind = "iio", device = "iio:lightsensor"}
+average-window = 10     # smooth over 10 samples
+sample-interval = 2     # sample every 2 seconds
+
+[controls.display]
+dest = {kind = "backlight", device = "intel_backlight"}
+min = 1                 # don't go all the way to zero!
+
+
+
+[controls.keyboard]
+
+```
+
+Random bag of thoughts:
+
+- There needs to be a manual override interface for nudging the determination up
+  and down.
+
+- The manual override should react immediately, not subject to hysteresis or
+  filtering or anything.
+
+- The program might be useful with _only_ the manual override for systems
+  without an ambient light sensor, to control the keyboard backlight along with
+  the display.
+
+- As noted above, some illuminators need to be turned off above a certain light
+  level.
+
+- Let's assume that all inputs are forced to a 0..1 scale, either by detecting
+  their max levels, or specifying it through configuration.
+
+- Let's also assume that all outputs are on a 0..1 scale.
+
+- Some outputs should not be able to reach 0, assume a user-provided minimum.
+  Anything that tries to get darker than that just clips.
+
+- There should probably also be an override to prevent an output from reaching
+  1.
+
+- Probably the right way to handle things like keyboard brightness is to force
+  them to zero if they exceed their max, instead of saturating.
+
+- It _might_ be enough to control everything linear? Sensors are probably
+  sensing flux rather than perceived brightness, and controls are controlling
+  current, generally. But providing an exponent on each thing is probably a good
+  idea even if it defaults to one.
+
+
+- Sensors probably wind up getting modeled as Streams. Things like filtering are
+  essentially transformers.
+
+- Filters that involve interpolation might have an output rate that differs from
+  their input rate.
+
+- Probably just assume one sensor to start with.
+
+- StreamMap in tokio-stream provides a nice way of handling this I suspect
+
+- So the controller winds up potentially becoming a many-to-many junction point:
+    - Collecting samples across multiple sensor streams
+    - Applying them to whatever averaging model is appropriate
+    - Distributing the result to listeners
+
+- It'd be real good to sync wakes across devices if possible....
+
+
+
+Okay, so, there is a DBus API for the keyboard backlight provided through
+upower.
+
+- system bus
+- dest: org.freedesktop.UPower
+- path: /org/freedesktop/UPower/KbdBacklight
+- methods: e.g. org.freedesktop.UPower.KbdBacklight.SetBrightness
+- works from logged in unprivileged user
+
+
