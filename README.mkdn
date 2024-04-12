@@ -1,0 +1,153 @@
+# The Ambient Walrus
+
+This is a simple service for monitoring ambient light sensors and adjusting the
+brightness of things. This makes it easier to use a laptop or other portable
+device in changing lighting conditions.
+
+The Walrus monitors some number of _sensors_ (currently 1) and applies
+adjustment to any number of _controls._
+
+## Sensor Support
+
+Currently supports a single input sensor, chosen from the following types:
+
+- `iio-sensors-proxy`: read Industrial I/O light sensors through the
+  `iio-sensors-proxy` service (installed separately).
+
+## Control Support
+
+Currently supports an arbitrary number of controlled things with independent
+mappings, chosen from the following types:
+
+- Linux `backlight` class.
+- Linux `tpacpi` (Thinkpad ACPI) keyboard backlight (in progress).
+
+## Configuration
+
+The Walrus needs to be told what to do; you do this by providing it with a
+configuration file. The configuration file uses TOML syntax and is designed to
+have pretty general defaults, but allow you to adjust behaviors to suit your
+device.
+
+Here is a minimal configuration file that drives a single backlight device from
+a single Industrial I/O ambient light sensor:
+
+```toml
+[sensor]
+driver = {kind = "iio-sensor-proxy"}
+
+[controls.backlight]
+driver = {kind = "backlight", device = "amdgpu_bl1"}
+```
+
+(Note that you may need to adjust the name `amdgpu_bl1` for your machine. You
+can find the names of backlight-class devices on Linux by running `ls
+/sys/class/backlight`.)
+
+Here's a full description of the configuration options:
+
+```toml
+# The sensor section defines parameters of the light sensor. Currently there is
+# only one light sensor.
+[sensor]
+
+# Chooses which sensor driver to use, and provides any additional settings for
+# the driver. Currently the only supported driver is iio-sensors-proxy, which
+# requires no driver-specific settings.
+#
+# Required.
+driver = {kind = "iio-sensor-proxy"}
+
+# Adjusts the input range for the sensor, using sensor units (often lux). By
+# default, the lo and hi end of the range are detected where possible, but for
+# lux sensors using Industrial I/O, there's currently no way to query the upper
+# bound on the sensor, so you need to specify at least "hi".
+#
+# Overriding the lo setting to a higher number will cause the backlight to go
+# "dimmest" at a higher level of illumination. Reducing the hi setting to a
+# lower number will cause the backlight to go "brightest" at a lower level of
+# illumination.
+#
+# Optional. You can also provide either lo or hi or both.
+input = {lo = 0, hi = 1234}
+
+# Polling rate for the sensor in Hz. This is how often the Walrus asks the
+# driver, and has no direct influence on any internal polling or filtering in
+# the sensor.
+#
+# Default: 60
+poll-hz = 60
+
+# Exponent for mapping sensed illumination to perceived brightness. Sensed
+# illumination is generally a linear measure of luminous flux, but humans
+# perceive brightness _exponentially._ If the controls seem to go bright or dim
+# very fast and then stay there, this exponent might need tweaking (though note
+# that each control _also_ has an exponent you can tweak).
+#
+# Default: 3
+exponent = 3
+
+# Each controls.NAME section defines some controlled device named NAME. The
+# choice of NAME is up to you, and just serves to distinguish the controls from
+# one another. Each NAME must be unique in the file.
+#
+# You can have any number of controls sections defining different devices.
+[controls.NAME]
+# Chooses which controller driver to use. Currently the main supported driver is
+# "backlight", which requires an additional "device" key naming a device.
+driver = {kind = "backlight", device = "amdgpu_bl1"}
+
+# Adjusts the sensor range that this control responds to, on a scale from 0 to
+# 1.
+#
+# Overriding the lo setting to a higher number will cause this control to go
+# "dimmest" at a higher level of illumination. Reducing the hi setting to a
+# lower number will cause this control to engage its "max-behavior" (see below)
+# at a lower level of illumination.
+#
+# Optional. You can also provide either lo or hi or both.
+# Default: {lo = 0, hi = 1}
+input = {lo = 0, hi = 1}
+
+# Adjusts the output range of this control that's actually used. The control
+# will not be adjusted below the "lo" provided here, or above the "hi" provided
+# here. Both values are on a scale from 0-1. So if you want to ensure that the
+# display backlight never goes below 10% brightness, provide lo=0.1.
+#
+# Optional. You can also provide either lo or hi or both.
+# Default: {lo = 0, hi = 1}
+output = {lo = 0, hi = 1}
+
+# Determines how the controlled device responds when its input signal meets or
+# exceeds the setting for input.hi. Options include:
+# - "saturate" (default): the control hangs out at its highest setting. This is
+#   most suitable for display backlights.
+# - "off": the control turns off. This is most suitable for supplemental
+#   lighting like keyboards.
+max-behavior = "saturate"
+
+# Exponent for mapping control output to raw device values. Backlight and LED
+# drivers generally directly control _current,_ and in the case of LEDs, current
+# linearly maps to light output -- but humans don't perceive brightness
+# linearly, but _exponentially._ If this control seems to go bright or dim very
+# fast and then stay there, this exponent might need tweaking. If _all_ the
+# controls behave this way, check the sensor.exponent instead.
+#
+# Default: 3
+exponent = 3
+
+# How fast this control will be adjusted, in fraction of its full range per
+# second. So, a value of 1.0 will change by 100 percent per second, 50 percent
+# in half a second, etc.
+#
+# Default: 0.5
+adjust-slope = 0.5
+
+# How often this control will be updated, in Hz. Higher numbers produce smoother
+# fades, but will use more CPU. Not all controls can be updated quickly, and
+# some (such as Thinkpad keyboard backlights) control fading internally. In
+# those cases you'll want to adjust this down.
+#
+# Default: 60
+update-rate = 60
+```
