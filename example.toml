@@ -1,9 +1,11 @@
 [sensor]
 driver = {kind = "iio-sensor-proxy"}
-input = {hi = 3300}
+input = {hi = 1000}
+exponent = 3
 
 [controls.backlight]
 driver = {kind = "backlight", device = "amdgpu_bl1"}
+exponent = 2
 
 #[controls.keyboard]
 #driver = {kind = "thinkpad-keyboard-backlight"}

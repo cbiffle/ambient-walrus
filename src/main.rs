@@ -9,7 +9,7 @@ use clap::Parser;
 use futures::Stream;
 use logind_zbus::session::SessionProxyBlocking;
 use serde::Deserialize;
-use tokio::{sync::watch, task::JoinSet};
+use tokio::{sync::watch, task::JoinSet, select};
 use tokio_stream::StreamExt;
 use zbus::{blocking::Connection, proxy};
 
@@ -45,6 +45,8 @@ enum SensorBackendConfig {
 struct CommonSensorConfig {
     #[serde(default)]
     input: OptRangeConfig,
+    #[serde(default)]
+    poll_hz: Option<f64>,
     #[serde(default = "one")]
     exponent: f64,
 }
@@ -137,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("{config:#?}");
 
-    let (illum_send, _illum_rx) = watch::channel(0.);
+    let (illum_send, _illum_rx) = watch::channel(None);
     let mut join_set = JoinSet::default();
 
     for (_name, control) in config.controls {
@@ -150,8 +152,8 @@ async fn main() -> anyhow::Result<()> {
         ).await?);
 
         while let Some(sample) = sensor_stream.next().await {
-            println!("sample = {sample}");
-            if illum_send.send(sample).is_err() {
+            //println!("sample = {sample}");
+            if illum_send.send(Some(sample)).is_err() {
                 // All recipients have been closed
                 break;
             }
@@ -169,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run_control(
     driver: ControlBackendConfig,
     common: CommonControlConfig,
-    illum: watch::Receiver<f64>,
+    illum: watch::Receiver<Option<f64>>,
 ) -> anyhow::Result<()> {
     match driver {
         ControlBackendConfig::Backlight(c) => linux_backlight(
@@ -181,11 +183,59 @@ async fn run_control(
     }
 }
 
+async fn backlight_seeker(
+    mut target_in: watch::Receiver<Option<f64>>,
+    mut apply: impl FnMut(f64),
+) {
+    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    let mut current = 0.;
+    let mut target_value = 0.;
+    let hyst = 0.005;
+    let slope: f64 = 0.02;
+    loop {
+        select! {
+            _ = interval.tick() => {
+                // How far off are we?
+                let error: f64 = current - target_value;
+                if error.abs() < hyst {
+                    // Close enough. Park it here.
+                    target_value = current;
+                    // Stop getting ticks.
+                    interval.reset_after(Duration::from_secs(60));
+                    println!("backlight sleeping (|{error}| < {hyst})");
+                } else {
+                    // Move toward the target at a constant rate.
+                    if error > 0. {
+                        current = (current - slope).max(target_value);
+                    } else {
+                        current = (current + slope).min(target_value);
+                    }
+                    println!("backlight = {current}");
+                    apply(current);
+                }
+            }
+            _ = target_in.changed() => {
+                if let Some(v) = *target_in.borrow_and_update() {
+                    if v != target_value {
+                        println!("new target = {v}");
+                        // Get the new value.
+                        target_value = v;
+                        // Restart the timer.
+                        interval.reset_immediately();
+                    }
+                } else {
+                    interval.reset_after(Duration::from_secs(60));
+                }
+            }
+        }
+    }
+}
+
 #[no_mangle] // stfu rustanalyzer
 async fn linux_backlight(
     common: CommonControlConfig,
     cfg: BacklightConfig,
-    mut illum: watch::Receiver<f64>,
+    illum: watch::Receiver<Option<f64>>,
 ) -> anyhow::Result<()> {
     let (bl, _) = brightr::use_specific_backlight(&cfg.device)?;
 
@@ -197,44 +247,44 @@ async fn linux_backlight(
     let max = f64::from(bl.max);
 
     // Commit point, we'll let the daemon stay up from here on.
-    loop {
-        let Ok(()) = illum.changed().await else {
-            return Ok(());
-        };
-        let sample = {
-            let mut sample = *illum.borrow_and_update();
-
-            // Map input range to 0..1, applying our saturation behavior
-            if sample > common.input.hi {
-                match common.max_behavior {
-                    MaxBehavior::Off => {
-                        if let Err(e) = brightr::set_brightness(&session, &bl, 0) {
-                            eprintln!("failed to turn off backlight: {e:?}");
+    backlight_seeker(
+        illum,
+        |x| {
+            let sample = {
+                let mut sample = x;
+                // Map input range to 0..1, applying our saturation behavior
+                if sample > common.input.hi {
+                    match common.max_behavior {
+                        MaxBehavior::Off => {
+                            if let Err(e) = brightr::set_brightness(&session, &bl, 0) {
+                                eprintln!("failed to turn off backlight: {e:?}");
+                            }
+                            return;
                         }
-                        continue;
-                    }
-                    MaxBehavior::Saturate => {
-                        sample = common.input.hi;
+                        MaxBehavior::Saturate => {
+                            sample = common.input.hi;
+                        }
                     }
                 }
+
+                sample = (sample - common.input.lo) / (common.input.hi - common.input.lo);
+                sample.clamp(0., 1.)
+            };
+
+            // Apply our output mapping.
+            let output = sample * (common.output.hi - common.output.lo) + common.output.lo;
+            //println!("backlight post-mapping = {output}");
+
+            let raw_output = (output.powf(common.exponent) * max).round() as u32;
+            //println!("backlight raw = {raw_output}");
+            // The max here is redundant but I'm sketchy about the floating point
+            // math
+            if let Err(e) = brightr::set_brightness(&session, &bl, u32::min(raw_output, bl.max)) {
+                eprintln!("failed to set backlight: {e:?}");
             }
-
-            sample = (sample - common.input.lo) / (common.input.hi - common.input.lo);
-            sample.clamp(0., 1.)
-        };
-
-        // Apply our output mapping.
-        let output = sample * (common.output.hi - common.output.lo) + common.output.lo;
-        println!("backlight post-mapping = {output}");
-
-        let raw_output = (output.powf(common.exponent) * max).round() as u32;
-        println!("backlight raw = {raw_output}");
-        // The max here is redundant but I'm sketchy about the floating point
-        // math
-        if let Err(e) = brightr::set_brightness(&session, &bl, u32::min(raw_output, bl.max)) {
-            eprintln!("failed to set backlight: {e:?}");
-        }
-    }
+        },
+    ).await;
+    Ok(())
 }
 
 
@@ -290,9 +340,17 @@ async fn iio_sensor_proxy(
 
     p.claim_light().await?;
 
+    let exponent = 1. / common.exponent;
+
+    let poll_interval = Duration::from_secs_f64(
+        1. / common.poll_hz.unwrap_or(2.)
+    );
+
+    let mut last = None;
+
     Ok(async_stream::stream! {
         loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(poll_interval).await;
             let level = match p.light_level().await {
                 Ok(x) => x,
                 Err(e) => {
@@ -300,9 +358,13 @@ async fn iio_sensor_proxy(
                     continue;
                 }
             };
-            println!("raw sensor reading = {level} {unit}");
 
-            yield ((level - min) / (max - min)).clamp(0., 1.);
+            if last != Some(level) {
+                println!("raw sensor reading = {level} {unit}");
+                last = Some(level);
+
+                yield ((level - min) / (max - min)).clamp(0., 1.).powf(exponent);
+            }
         }
     })
 }
