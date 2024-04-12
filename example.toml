@@ -6,6 +6,8 @@ exponent = 3
 [controls.backlight]
 driver = {kind = "backlight", device = "amdgpu_bl1"}
 exponent = 2
+adjust-slope = 0.5
+update-rate = 60
 
 #[controls.keyboard]
 #driver = {kind = "thinkpad-keyboard-backlight"}

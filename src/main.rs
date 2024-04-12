@@ -2,14 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{path::{PathBuf, Path}, collections::BTreeMap, time::Duration, pin::pin};
+use std::{path::PathBuf, collections::BTreeMap, time::Duration, pin::pin};
 
 use anyhow::{Context, bail};
 use clap::Parser;
 use futures::Stream;
+use log::{debug, trace, error};
 use logind_zbus::session::SessionProxyBlocking;
 use serde::Deserialize;
-use tokio::{sync::watch, task::JoinSet, select};
+use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
 use zbus::{blocking::Connection, proxy};
 
@@ -73,6 +74,10 @@ struct CommonControlConfig {
     max_behavior: MaxBehavior,
     #[serde(default = "one")]
     exponent: f64,
+    #[serde(default = "one")]
+    adjust_slope: f64,
+    #[serde(default)]
+    update_rate: Option<f64>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -130,14 +135,18 @@ struct AmbientWalrus {
     config_file: PathBuf,
 }
 
-#[tokio::main]
+// Use tokio for its convenient composition of state machines, but don't spin up
+// craploads of threads.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = AmbientWalrus::parse();
+
+    env_logger::init();
 
     let config_text = std::fs::read_to_string(&args.config_file)?;
     let config: Config = toml::from_str(&config_text)?;
 
-    println!("{config:#?}");
+    debug!("{config:#?}");
 
     let (illum_send, _illum_rx) = watch::channel(None);
     let mut join_set = JoinSet::default();
@@ -152,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
         ).await?);
 
         while let Some(sample) = sensor_stream.next().await {
-            //println!("sample = {sample}");
+            trace!("sensor sample = {sample}");
             if illum_send.send(Some(sample)).is_err() {
                 // All recipients have been closed
                 break;
@@ -184,47 +193,72 @@ async fn run_control(
 }
 
 async fn backlight_seeker(
+    common: &CommonControlConfig,
     mut target_in: watch::Receiver<Option<f64>>,
     mut apply: impl FnMut(f64),
 ) {
-    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    let mut interval = tokio::time::interval(Duration::from_secs_f64(1. / common.update_rate.unwrap_or(30.)));
     let mut current = 0.;
-    let mut target_value = 0.;
-    let hyst = 0.005;
-    let slope: f64 = 0.02;
+
+    struct Seek {
+        target: f64,
+        begin_time: Instant,
+        begin_value: f64,
+    }
+    let mut seek: Option<Seek> = None;
+    // How close to the target we have to get before stopping.
+    let hyst = 0.1;
+    // What fraction of the full range per second we'll move.
+    let slope: f64 = common.adjust_slope;
     loop {
         select! {
             _ = interval.tick() => {
-                // How far off are we?
-                let error: f64 = current - target_value;
-                if error.abs() < hyst {
-                    // Close enough. Park it here.
-                    target_value = current;
-                    // Stop getting ticks.
-                    interval.reset_after(Duration::from_secs(60));
-                    println!("backlight sleeping (|{error}| < {hyst})");
-                } else {
-                    // Move toward the target at a constant rate.
-                    if error > 0. {
-                        current = (current - slope).max(target_value);
+                if let Some(in_progress) = &seek {
+                    // How far off are we?
+                    let error: f64 = current - in_progress.target;
+                    if error.abs() < hyst {
+                        // Close enough. Park it here.
+                        seek = None;
+                        // Stop getting ticks.
+                        interval.reset_after(Duration::from_secs(60));
+                        debug!("backlight sleeping (|{error}| < {hyst})");
                     } else {
-                        current = (current + slope).min(target_value);
+                        let t = in_progress.begin_time.elapsed().as_secs_f64();
+                        // Move toward the target at a constant rate.
+                        if error > 0. {
+                            current = (in_progress.begin_value - t * slope).max(in_progress.target);
+                        } else {
+                            current = (in_progress.begin_value + t * slope).min(in_progress.target);
+                        }
+                        debug!("backlight = {current}");
+                        apply(current);
                     }
-                    println!("backlight = {current}");
-                    apply(current);
+                } else {
+                    debug!("resetting timer into future again");
+                    interval.reset_after(Duration::from_secs(60));
                 }
             }
             _ = target_in.changed() => {
                 if let Some(v) = *target_in.borrow_and_update() {
-                    if v != target_value {
-                        println!("new target = {v}");
-                        // Get the new value.
-                        target_value = v;
-                        // Restart the timer.
+                    // Only reset the timer if we're not already seeking.
+                    if seek.is_none() {
                         interval.reset_immediately();
                     }
+                    // We'll start a seek here unconditionally, and rely on the
+                    // hysteresis logic at the timer tick handler above to turn
+                    // it back off if it's unnecessary.
+                    debug!("new backlight target = {v}");
+                    seek = Some(Seek {
+                        target: v,
+                        begin_time: Instant::now(),
+                        begin_value: current,
+                    });
                 } else {
-                    interval.reset_after(Duration::from_secs(60));
+                    // Null reading from the sensor, disable the timer, but only
+                    // if we're not already seeking.
+                    if seek.is_none() {
+                        interval.reset_after(Duration::from_secs(60));
+                    }
                 }
             }
         }
@@ -248,6 +282,7 @@ async fn linux_backlight(
 
     // Commit point, we'll let the daemon stay up from here on.
     backlight_seeker(
+        &common,
         illum,
         |x| {
             let sample = {
@@ -257,7 +292,7 @@ async fn linux_backlight(
                     match common.max_behavior {
                         MaxBehavior::Off => {
                             if let Err(e) = brightr::set_brightness(&session, &bl, 0) {
-                                eprintln!("failed to turn off backlight: {e:?}");
+                                error!("failed to turn off backlight: {e:?}");
                             }
                             return;
                         }
@@ -273,14 +308,14 @@ async fn linux_backlight(
 
             // Apply our output mapping.
             let output = sample * (common.output.hi - common.output.lo) + common.output.lo;
-            //println!("backlight post-mapping = {output}");
+            trace!("backlight post-mapping = {output}");
 
             let raw_output = (output.powf(common.exponent) * max).round() as u32;
-            //println!("backlight raw = {raw_output}");
+            trace!("backlight raw = {raw_output}");
             // The max here is redundant but I'm sketchy about the floating point
             // math
             if let Err(e) = brightr::set_brightness(&session, &bl, u32::min(raw_output, bl.max)) {
-                eprintln!("failed to set backlight: {e:?}");
+                error!("failed to set backlight: {e:?}");
             }
         },
     ).await;
@@ -354,13 +389,13 @@ async fn iio_sensor_proxy(
             let level = match p.light_level().await {
                 Ok(x) => x,
                 Err(e) => {
-                    eprintln!("error reading light level: {e:?}");
+                    error!("error reading light level: {e:?}");
                     continue;
                 }
             };
 
             if last != Some(level) {
-                println!("raw sensor reading = {level} {unit}");
+                trace!("raw sensor reading = {level} {unit}");
                 last = Some(level);
 
                 yield ((level - min) / (max - min)).clamp(0., 1.).powf(exponent);

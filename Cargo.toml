@@ -10,7 +10,9 @@ anyhow = "1.0.81"
 async-stream = "0.3.5"
 brightr = { version = "0.1.0", git = "https://github.com/cbiffle/brightr" }
 clap = { version = "4.5.4", features = ["derive", "wrap_help"] }
+env_logger = "0.11.3"
 futures = "0.3.30"
+log = "0.4.21"
 logind-zbus = "4.0.2"
 serde = { version = "1.0.197", features = ["derive"] }
 tokio = { version = "1.36.0", features = ["rt", "full"] }
