@@ -19,8 +19,21 @@ Currently supports a single input sensor, chosen from the following types:
 Currently supports an arbitrary number of controlled things with independent
 mappings, chosen from the following types:
 
-- Linux `backlight` class.
+- Linux `backlight` class. This gets proxied through logind to avoid requiring
+  root privileges, as long as it's run by a user logged in at display.
 - Linux `tpacpi` (Thinkpad ACPI) keyboard backlight (in progress).
+
+## Power and Wakes
+
+Currently, a release build of `ambient-walrus` using `iio-sensors-proxy` for
+input and `backlight` for output (which winds up going via logind) generates
+about 3 wakes/second in typical indoor lighting conditions (2 in
+`ambient-walrus` itself, 1 in `iio-sensors-proxy`). During a brightness change,
+the wake frequency is determined primarily by the `controls.NAME.update-rate`
+setting, and by default is about 60/s, stopping once brightness gets close to
+the new target value.
+
+I'd like to get these rates lower.
 
 ## Configuration
 
@@ -73,10 +86,12 @@ input = {lo = 0, hi = 1234}
 
 # Polling rate for the sensor in Hz. This is how often the Walrus asks the
 # driver, and has no direct influence on any internal polling or filtering in
-# the sensor.
+# the sensor. Drivers are generally assumed to be providing a sensor-appropriate
+# low-pass filter internally; if that needs configuration it'll be on the
+# "driver" key above.
 #
-# Default: 60
-poll-hz = 60
+# Default: 1
+poll-hz = 1
 
 # Exponent for mapping sensed illumination to perceived brightness. Sensed
 # illumination is generally a linear measure of luminous flux, but humans
@@ -147,6 +162,9 @@ adjust-slope = 0.5
 # fades, but will use more CPU. Not all controls can be updated quickly, and
 # some (such as Thinkpad keyboard backlights) control fading internally. In
 # those cases you'll want to adjust this down.
+#
+# Note that this only comes into play when the brightness is actually
+# _changing._ Between changes, we don't update the device to save power.
 #
 # Default: 60
 update-rate = 60

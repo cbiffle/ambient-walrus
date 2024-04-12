@@ -53,7 +53,7 @@ struct CommonSensorConfig {
 }
 
 impl CommonSensorConfig {
-    const DEFAULT_POLL_HZ: f64 = 2.;
+    const DEFAULT_POLL_HZ: f64 = 1.;
     const DEFAULT_EXPONENT: f64 = 3.;
 }
 
@@ -249,13 +249,23 @@ async fn backlight_seeker(
             }
             _ = target_in.changed() => {
                 if let Some(v) = *target_in.borrow_and_update() {
-                    // Only reset the timer if we're not already seeking.
+                    // If we're not currently seeking, this may be our first
+                    // wake in a while. We'd like to keep it that way! So we'll
+                    // duplicate the hysteresis checking logic to avoid relying
+                    // on a timer tick.
                     if seek.is_none() {
-                        interval.reset_immediately();
+                        let error = current - v;
+                        if error.abs() < hyst {
+                            // ignore this.
+                            debug!("new target {v} uninteresting: e={error}");
+                            continue;
+                        } else {
+                            // We're about to _begin_ seeking, which means we
+                            // need to restart the interval timer.
+                            interval.reset_immediately();
+                        }
                     }
-                    // We'll start a seek here unconditionally, and rely on the
-                    // hysteresis logic at the timer tick handler above to turn
-                    // it back off if it's unnecessary.
+
                     debug!("new backlight target = {v}");
                     seek = Some(Seek {
                         target: v,
