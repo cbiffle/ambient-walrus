@@ -25,15 +25,15 @@ mappings, chosen from the following types:
 
 ## Power and Wakes
 
-Currently, a release build of `ambient-walrus` using `iio-sensors-proxy` for
-input and `backlight` for output (which winds up going via logind) generates
-about 3 wakes/second in typical indoor lighting conditions (2 in
-`ambient-walrus` itself, 1 in `iio-sensors-proxy`). During a brightness change,
-the wake frequency is determined primarily by the `controls.NAME.update-rate`
-setting, and by default is about 60/s, stopping once brightness gets close to
-the new target value.
+`ambient-walrus` tries not to wake the CPU when nothing is changing. Sensor
+drivers use change notifications where possible, to avoid polling. Note that
+other processes required by the sensor driver may wake more often than this ---
+for instance, `iio-sensors-proxy` seems to wake about 2/sec when a sensor is
+being monitored.
 
-I'd like to get these rates lower.
+During a lighting change, the wake rate is determined primarily by the
+`controls.NAME.update-rate` setting, and by default is about 60/s, stopping
+once brightness gets close to the new target value.
 
 ## Configuration
 
@@ -90,8 +90,13 @@ input = {lo = 0, hi = 1234}
 # low-pass filter internally; if that needs configuration it'll be on the
 # "driver" key above.
 #
-# Default: 1
-poll-hz = 1
+# Sensor drivers try not to require polling, so in practice this serves as a
+# backup in the event that sensor change notifications stop flowing. Some
+# sensor drivers might need polling, however, in which case you might need to
+# adjust this up.
+#
+# Default: 0.2 (every 5 seconds)
+poll-hz = 0.2
 
 # Exponent for mapping sensed illumination to perceived brightness. Sensed
 # illumination is generally a linear measure of luminous flux, but humans

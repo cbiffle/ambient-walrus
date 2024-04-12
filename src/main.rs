@@ -53,7 +53,7 @@ struct CommonSensorConfig {
 }
 
 impl CommonSensorConfig {
-    const DEFAULT_POLL_HZ: f64 = 1.;
+    const DEFAULT_POLL_HZ: f64 = 0.2;
     const DEFAULT_EXPONENT: f64 = 3.;
 }
 
@@ -367,11 +367,11 @@ async fn run_sensor(
     default_path = "/net/hadess/SensorProxy",
 )]
 trait IioSensors {
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn has_ambient_light(&self) -> zbus::fdo::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn light_level_unit(&self) -> zbus::fdo::Result<String>;
-    #[zbus(property(emits_changed_signal = "true"))]
+    #[zbus(property)]
     fn light_level(&self) -> zbus::fdo::Result<f64>;
 
     fn claim_light(&self) -> zbus::fdo::Result<()>;
@@ -422,13 +422,36 @@ async fn iio_sensor_proxy(
     let mut last = None;
 
     Ok(async_stream::stream! {
+        let mut change_stream = p.receive_light_level_changed().await;
         loop {
-            tokio::time::sleep(poll_interval).await;
-            let level = match p.light_level().await {
-                Ok(x) => x,
-                Err(e) => {
-                    error!("error reading light level: {e:?}");
-                    continue;
+            let level = select! {
+                change = change_stream.next() => {
+                    match change {
+                        None => {
+                            // Huh. End of stream.
+                            error!("reached end of light level change stream");
+                            continue;
+                        }
+                        Some(vchange) => match vchange.get().await {
+                            Ok(value) => {
+                                trace!("light level change signal: {value}");
+                                value
+                            },
+                            Err(e) => {
+                                error!("can't get changed property: {e:?}");
+                                continue;
+                            }
+                        },
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {
+                    match p.light_level().await {
+                        Ok(x) => x,
+                        Err(e) => {
+                            error!("error reading light level: {e:?}");
+                            continue;
+                        }
+                    }
                 }
             };
 
