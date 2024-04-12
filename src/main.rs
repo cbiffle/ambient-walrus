@@ -203,11 +203,11 @@ async fn run_control(
 
 async fn backlight_seeker(
     common: &CommonControlConfig,
+    mut current: f64,
     mut target_in: watch::Receiver<Option<f64>>,
     mut apply: impl FnMut(f64),
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs_f64(1. / common.update_rate.unwrap_or(CommonControlConfig::DEFAULT_UPDATE_RATE)));
-    let mut current = 0.;
 
     struct Seek {
         target: f64,
@@ -279,13 +279,13 @@ async fn linux_backlight(
     cfg: BacklightConfig,
     illum: watch::Receiver<Option<f64>>,
 ) -> anyhow::Result<()> {
-    let bl = {
-        let (mut bl, _) = brightr::use_specific_backlight(&cfg.device)?;
+    let (bl, raw_start) = {
+        let (mut bl, current) = brightr::use_specific_backlight(&cfg.device)?;
         // Override driver-reported max setting if requested by the user.
         if let Some(m) = cfg.raw_max {
             bl.max = m;
         }
-        bl
+        (bl, current)
     };
 
     let conn = Connection::system()?;
@@ -296,9 +296,13 @@ async fn linux_backlight(
     let max = f64::from(bl.max);
     let exponent = common.exponent.unwrap_or(CommonControlConfig::DEFAULT_EXPONENT);
 
+    let start = (f64::from(raw_start) / max).clamp(0., 1.).powf(1. / exponent);
+    let start_mapped = start - common.output.lo / (common.output.hi - common.output.lo);
+
     // Commit point, we'll let the daemon stay up from here on.
     backlight_seeker(
         &common,
+        start_mapped,
         illum,
         |x| {
             let sample = {
