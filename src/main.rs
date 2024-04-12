@@ -156,9 +156,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     join_set.spawn(async move {
-        let mut sensor_stream = pin!(iio_sensor_proxy(
-            config.sensor.common,
-        ).await?);
+        let mut sensor_stream = pin!(run_sensor(config.sensor).await?);
 
         while let Some(sample) = sensor_stream.next().await {
             trace!("sensor sample = {sample}");
@@ -265,13 +263,19 @@ async fn backlight_seeker(
     }
 }
 
-#[no_mangle] // stfu rustanalyzer
 async fn linux_backlight(
     common: CommonControlConfig,
     cfg: BacklightConfig,
     illum: watch::Receiver<Option<f64>>,
 ) -> anyhow::Result<()> {
-    let (bl, _) = brightr::use_specific_backlight(&cfg.device)?;
+    let bl = {
+        let (mut bl, _) = brightr::use_specific_backlight(&cfg.device)?;
+        // Override driver-reported max setting if requested by the user.
+        if let Some(m) = cfg.raw_max {
+            bl.max = m;
+        }
+        bl
+    };
 
     let conn = Connection::system()?;
     let session = SessionProxyBlocking::builder(&conn)
@@ -320,6 +324,14 @@ async fn linux_backlight(
         },
     ).await;
     Ok(())
+}
+
+async fn run_sensor(
+    config: SensorConfig,
+) -> anyhow::Result<impl Stream<Item = f64>> {
+    match config.driver {
+        SensorBackendConfig::IioSensorProxy => iio_sensor_proxy(config.common).await,
+    }
 }
 
 
