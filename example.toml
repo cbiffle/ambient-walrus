@@ -1,14 +1,23 @@
+# Example configuration file for my Framework 16.
+
+# The FW16's backlight sensor appears as an IIO driver, which means we can
+# defer to iio-sensor-proxy to monitor it as an unprivileged user. For this to
+# work, you'll need to install the iio-sensor-proxy service.
 [sensor]
 driver = {kind = "iio-sensor-proxy"}
+# Saturate the input at a lower lux level than the sensor natively supports,
+# which causes the backlight to be fully "on" faster.
 input = {hi = 1000}
-exponent = 3
 
+# Control the display backlight:
 [controls.backlight]
+# Backlight appears as a Linux backlight-class device using this name:
 driver = {kind = "backlight", device = "amdgpu_bl1"}
+# Empirically, its perceived brightness uses a lower exponent than most.
 exponent = 2
-adjust-slope = 0.5
-update-rate = 60
 
+# Placeholder configuration for the TPACPI-based Thinkpad keyboard backlight on
+# my other laptop. FW16's keyboard backlight isn't exposed to Linux, annoyingly.
 #[controls.keyboard]
 #driver = {kind = "thinkpad-keyboard-backlight"}
 #input = {hi = 0.5}

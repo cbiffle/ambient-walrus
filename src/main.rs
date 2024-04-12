@@ -48,8 +48,13 @@ struct CommonSensorConfig {
     input: OptRangeConfig,
     #[serde(default)]
     poll_hz: Option<f64>,
-    #[serde(default = "one")]
-    exponent: f64,
+    #[serde(default)]
+    exponent: Option<f64>,
+}
+
+impl CommonSensorConfig {
+    const DEFAULT_POLL_HZ: f64 = 2.;
+    const DEFAULT_EXPONENT: f64 = 3.;
 }
 
 #[derive(Deserialize, Debug)]
@@ -72,12 +77,18 @@ struct CommonControlConfig {
     output: RangeConfig,
     #[serde(default)]
     max_behavior: MaxBehavior,
-    #[serde(default = "one")]
-    exponent: f64,
-    #[serde(default = "one")]
-    adjust_slope: f64,
+    #[serde(default)]
+    exponent: Option<f64>,
+    #[serde(default)]
+    adjust_slope: Option<f64>,
     #[serde(default)]
     update_rate: Option<f64>,
+}
+
+impl CommonControlConfig {
+    const DEFAULT_ADJUST_SLOPE: f64 = 0.5;
+    const DEFAULT_UPDATE_RATE: f64 = 60.;
+    const DEFAULT_EXPONENT: f64 = 3.;
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -195,7 +206,7 @@ async fn backlight_seeker(
     mut target_in: watch::Receiver<Option<f64>>,
     mut apply: impl FnMut(f64),
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs_f64(1. / common.update_rate.unwrap_or(30.)));
+    let mut interval = tokio::time::interval(Duration::from_secs_f64(1. / common.update_rate.unwrap_or(CommonControlConfig::DEFAULT_UPDATE_RATE)));
     let mut current = 0.;
 
     struct Seek {
@@ -207,7 +218,7 @@ async fn backlight_seeker(
     // How close to the target we have to get before stopping.
     let hyst = 0.1;
     // What fraction of the full range per second we'll move.
-    let slope: f64 = common.adjust_slope;
+    let slope: f64 = common.adjust_slope.unwrap_or(CommonControlConfig::DEFAULT_ADJUST_SLOPE);
     loop {
         select! {
             _ = interval.tick() => {
@@ -283,6 +294,7 @@ async fn linux_backlight(
         .build()?;
 
     let max = f64::from(bl.max);
+    let exponent = common.exponent.unwrap_or(CommonControlConfig::DEFAULT_EXPONENT);
 
     // Commit point, we'll let the daemon stay up from here on.
     backlight_seeker(
@@ -314,7 +326,7 @@ async fn linux_backlight(
             let output = sample * (common.output.hi - common.output.lo) + common.output.lo;
             trace!("backlight post-mapping = {output}");
 
-            let raw_output = (output.powf(common.exponent) * max).round() as u32;
+            let raw_output = (output.powf(exponent) * max).round() as u32;
             trace!("backlight raw = {raw_output}");
             // The max here is redundant but I'm sketchy about the floating point
             // math
@@ -387,10 +399,10 @@ async fn iio_sensor_proxy(
 
     p.claim_light().await?;
 
-    let exponent = 1. / common.exponent;
+    let exponent = 1. / common.exponent.unwrap_or(CommonSensorConfig::DEFAULT_EXPONENT);
 
     let poll_interval = Duration::from_secs_f64(
-        1. / common.poll_hz.unwrap_or(2.)
+        1. / common.poll_hz.unwrap_or(CommonSensorConfig::DEFAULT_POLL_HZ)
     );
 
     let mut last = None;
