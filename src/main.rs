@@ -143,7 +143,7 @@ impl Default for RangeConfig {
 #[derive(Parser)]
 struct AmbientWalrus {
     #[clap(short = 'f', long)]
-    config_file: PathBuf,
+    config_file: Option<PathBuf>,
 }
 
 // Use tokio for its convenient composition of state machines, but don't spin up
@@ -154,7 +154,25 @@ async fn main() -> anyhow::Result<()> {
 
     env_logger::init();
 
-    let config_text = std::fs::read_to_string(&args.config_file)?;
+    let config_path = if let Some(path) = args.config_file {
+        path
+    } else {
+        let bd = xdg::BaseDirectories::with_prefix("ambientwalrus")?;
+        match bd.find_config_file("config.toml") {
+            Some(path) => path,
+            None => {
+                eprintln!("Error: no configuration file found, and no path specified");
+                eprintln!("FYI: searched the following locations without success:");
+                eprintln!("- {}", bd.get_config_home().join("config.toml").display());
+                for d in bd.get_config_dirs() {
+                    eprintln!("- {}", d.join("config.toml").display());
+                }
+                bail!("ensure config is present/readable or override with -f/--config-file");
+            }
+        }
+    };
+
+    let config_text = std::fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&config_text)?;
 
     debug!("{config:#?}");

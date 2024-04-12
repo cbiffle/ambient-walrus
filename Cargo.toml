@@ -18,4 +18,5 @@ serde = { version = "1.0.197", features = ["derive"] }
 tokio = { version = "1.36.0", features = ["rt", "full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
 toml = "0.7.8"
+xdg = "2.5.2"
 zbus = "4.1.2"

@@ -42,6 +42,11 @@ configuration file. The configuration file uses TOML syntax and is designed to
 have pretty general defaults, but allow you to adjust behaviors to suit your
 device.
 
+The Walrus will look for configuration in the XDG config directories. Generally
+you probably want to place it in `~/.config/ambientwalrus/config.toml` or, to
+share between users, `/etc/xdg/ambientwalrus/config.toml`. But you can also
+specify a different location using the `-f`/`--config-file` flag.
+
 Here is a minimal configuration file that drives a single backlight device from
 a single Industrial I/O ambient light sensor:
 
