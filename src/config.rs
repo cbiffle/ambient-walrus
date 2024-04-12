@@ -1,16 +1,38 @@
 use std::collections::BTreeMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const fn one() -> f64 { 1. }
 
-#[derive(Deserialize, Debug)]
+pub fn make_example() -> Config {
+    Config {
+        sensor: SensorConfig {
+            driver: SensorBackendConfig::IioSensorProxy,
+            common: CommonSensorConfig {
+                input: None,
+                poll_hz: None,
+                exponent: None,
+            },
+        },
+        controls: [
+            ("backlight".to_string(), ControlConfig {
+                driver: ControlBackendConfig::Backlight(BacklightConfig {
+                    device: "my_backlight_device".to_string(),
+                    raw_max: None,
+                }),
+                common: CommonControlConfig::default(),
+            }),
+        ].into_iter().collect(),
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub sensor: SensorConfig,
     pub controls: BTreeMap<String, ControlConfig>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct SensorConfig {
@@ -20,19 +42,19 @@ pub struct SensorConfig {
     pub common: CommonSensorConfig,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub enum SensorBackendConfig {
     IioSensorProxy,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct CommonSensorConfig {
     #[serde(default)]
-    pub input: OptRangeConfig,
+    pub input: Option<OptRangeConfig>,
     #[serde(default)]
     pub poll_hz: Option<f64>,
     #[serde(default)]
@@ -44,7 +66,7 @@ impl CommonSensorConfig {
     pub const DEFAULT_EXPONENT: f64 = 3.;
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct ControlConfig {
@@ -54,16 +76,16 @@ pub struct ControlConfig {
     pub common: CommonControlConfig,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug, Default)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct CommonControlConfig {
     #[serde(default)]
-    pub input: RangeConfig,
+    pub input: Option<RangeConfig>,
     #[serde(default)]
-    pub output: RangeConfig,
+    pub output: Option<RangeConfig>,
     #[serde(default)]
-    pub max_behavior: MaxBehavior,
+    pub max_behavior: Option<MaxBehavior>,
     #[serde(default)]
     pub exponent: Option<f64>,
     #[serde(default)]
@@ -78,7 +100,7 @@ impl CommonControlConfig {
     pub const DEFAULT_EXPONENT: f64 = 3.;
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum MaxBehavior {
     Off,
@@ -86,7 +108,7 @@ pub enum MaxBehavior {
     Saturate,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub enum ControlBackendConfig {
@@ -94,8 +116,8 @@ pub enum ControlBackendConfig {
     ThinkpadKeyboardBacklight,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[derive(Clone, Deserialize, Serialize, Debug)]
+#[serde(rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub struct BacklightConfig {
     pub device: String,
@@ -103,7 +125,7 @@ pub struct BacklightConfig {
 }
 
 
-#[derive(Deserialize, Debug)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct RangeConfig {
     #[serde(default)]
@@ -112,7 +134,7 @@ pub struct RangeConfig {
     pub hi: f64,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OptRangeConfig {
     #[serde(default)]
