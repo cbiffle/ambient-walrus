@@ -2,143 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{path::PathBuf, collections::BTreeMap, time::Duration, pin::pin};
+mod config;
+
+use std::{path::PathBuf, time::Duration, pin::pin};
 
 use anyhow::{Context, bail};
 use clap::Parser;
+use config::{BacklightConfig, CommonSensorConfig, SensorConfig, SensorBackendConfig};
 use futures::Stream;
 use log::{debug, trace, error};
 use logind_zbus::session::SessionProxyBlocking;
-use serde::Deserialize;
 use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
 use zbus::{blocking::Connection, proxy};
 
-const fn one() -> f64 { 1. }
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-struct Config {
-    sensor: SensorConfig,
-    controls: BTreeMap<String, ControlConfig>,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-struct SensorConfig {
-    driver: SensorBackendConfig,
-
-    #[serde(flatten)]
-    common: CommonSensorConfig,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-#[serde(deny_unknown_fields)]
-enum SensorBackendConfig {
-    IioSensorProxy,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-struct CommonSensorConfig {
-    #[serde(default)]
-    input: OptRangeConfig,
-    #[serde(default)]
-    poll_hz: Option<f64>,
-    #[serde(default)]
-    exponent: Option<f64>,
-}
-
-impl CommonSensorConfig {
-    const DEFAULT_POLL_HZ: f64 = 0.2;
-    const DEFAULT_EXPONENT: f64 = 3.;
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-struct ControlConfig {
-    driver: ControlBackendConfig,
-
-    #[serde(flatten)]
-    common: CommonControlConfig,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-struct CommonControlConfig {
-    #[serde(default)]
-    input: RangeConfig,
-    #[serde(default)]
-    output: RangeConfig,
-    #[serde(default)]
-    max_behavior: MaxBehavior,
-    #[serde(default)]
-    exponent: Option<f64>,
-    #[serde(default)]
-    adjust_slope: Option<f64>,
-    #[serde(default)]
-    update_rate: Option<f64>,
-}
-
-impl CommonControlConfig {
-    const DEFAULT_ADJUST_SLOPE: f64 = 0.5;
-    const DEFAULT_UPDATE_RATE: f64 = 60.;
-    const DEFAULT_EXPONENT: f64 = 3.;
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(rename_all = "kebab-case")]
-enum MaxBehavior {
-    Off,
-    #[default]
-    Saturate,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-#[serde(deny_unknown_fields)]
-enum ControlBackendConfig {
-    Backlight(BacklightConfig),
-    ThinkpadKeyboardBacklight,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-#[serde(deny_unknown_fields)]
-struct BacklightConfig {
-    device: String,
-    raw_max: Option<u32>,
-}
-
-
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-struct RangeConfig {
-    #[serde(default)]
-    lo: f64,
-    #[serde(default = "one")]
-    hi: f64,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(deny_unknown_fields)]
-struct OptRangeConfig {
-    #[serde(default)]
-    lo: Option<f64>,
-    #[serde(default)]
-    hi: Option<f64>,
-}
-
-impl Default for RangeConfig {
-    fn default() -> Self {
-        Self { lo: 0., hi: 1. }
-    }
-}
+use crate::config::{Config, ControlBackendConfig, CommonControlConfig, MaxBehavior};
 
 #[derive(Parser)]
 struct AmbientWalrus {
