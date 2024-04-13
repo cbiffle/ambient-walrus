@@ -57,6 +57,8 @@ enum IpcCmd {
     Down { amount: f64 },
     /// Reset brightness adjustments to default.
     ResetAdjustment,
+    /// Asks the instance to exit.
+    Quit,
 }
 
 // Use tokio for its convenient composition of state machines, but don't spin up
@@ -455,6 +457,11 @@ impl Remote {
         trace!("adjustment = {}", self.adjust);
         self.sender.send(self.adjust).ok();
     }
+
+    async fn quit(&mut self) {
+        // TODO should be nicer than this
+        std::process::exit(0);
+    }
 }
 
 fn adjust_stream(
@@ -514,6 +521,9 @@ async fn do_ipc(ipc: IpcCmd) -> anyhow::Result<()> {
         IpcCmd::ResetAdjustment => {
             proxy.set_adjustment(0.).await?;
         }
+        IpcCmd::Quit => {
+            proxy.quit().await?;
+        }
     }
     Ok(())
 }
@@ -526,4 +536,5 @@ async fn do_ipc(ipc: IpcCmd) -> anyhow::Result<()> {
 trait Remote {
     async fn adjust_by(&self, amt: f64) -> zbus::Result<()>;
     async fn set_adjustment(&self, amt: f64) -> zbus::Result<()>;
+    async fn quit(&self) -> zbus::Result<()>;
 }
