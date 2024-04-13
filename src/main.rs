@@ -14,6 +14,7 @@ use log::{debug, trace, error};
 use logind_zbus::session::SessionProxy;
 use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use zbus::{Connection, proxy, interface};
 
 use crate::config::{Config, ControlBackendConfig, CommonControlConfig, MaxBehavior};
@@ -109,46 +110,58 @@ async fn main() -> anyhow::Result<()> {
     debug!("--- end configuration ---");
 
     let (adjust_send, adjust_recv) = tokio::sync::broadcast::channel(1);
+    let (illum_send, _illum_rx) = watch::channel(None);
+    let mut join_set = JoinSet::default();
+    let cancel = CancellationToken::new();
+
+    for (_name, control) in config.controls {
+        join_set.spawn(run_control(control.driver, control.common, illum_send.subscribe(), cancel.child_token()));
+    }
+
+    {
+        let cancel_child = cancel.child_token();
+        join_set.spawn(async move {
+            let sensor_stream = run_sensor(config.sensor).await?;
+            let mut adjusted_stream = pin!(adjust_stream(sensor_stream, adjust_recv, cancel_child));
+
+            while let Some(sample) = adjusted_stream.next().await {
+                trace!("adjusted sample = {sample}");
+                if illum_send.send(Some(sample.clamp(0., 1.))).is_err() {
+                    // All recipients have been closed
+                    break;
+                }
+            }
+            Ok(())
+        });
+    }
+
     // The zbus builder APIs use Result for things that, IMO, ought to be
     // panics. In particular the `name` and `serve_at` operations can't fail for
     // any reason other than providing a bogus name/path string.
-    let _session = zbus::connection::Builder::session().expect("canned session name can't be parsed!?")
+    let session = zbus::connection::Builder::session().expect("canned session name can't be parsed!?")
         .name("com.cliffle.AmbientWalrus").expect("constant name can't be parsed!?")
         .serve_at("/com/cliffle/AmbientWalrus", Remote {
             sender: adjust_send,
             adjust: 0.,
+            cancel,
         }).expect("constant path can't be parsed!?")
         .build()
         .await
         .context("can't start DBus server, is there already an instance running?\n\
-                  To check, run:   ambientwalrus ipc ping
+                  To check, run:   ambientwalrus ipc ping\n\
                   To shut it down: ambientwalrus ipc quit")?;
-
-    let (illum_send, _illum_rx) = watch::channel(None);
-    let mut join_set = JoinSet::default();
-
-    for (_name, control) in config.controls {
-        join_set.spawn(run_control(control.driver, control.common, illum_send.subscribe()));
-    }
-
-    join_set.spawn(async move {
-        let sensor_stream = run_sensor(config.sensor).await?;
-        let mut adjusted_stream = pin!(adjust_stream(sensor_stream, adjust_recv));
-
-        while let Some(sample) = adjusted_stream.next().await {
-            trace!("adjusted sample = {sample}");
-            if illum_send.send(Some(sample.clamp(0., 1.))).is_err() {
-                // All recipients have been closed
-                break;
-            }
-        }
-        Ok(())
-    });
 
     while let Some(result) = join_set.join_next().await {
         result.context("task panicked")?
             .context("task failed")?;
     }
+
+    // TODO: I can't figure out a good way to let the quit IPC finish responding
+    // before shutting everything down; session.close() does not do it.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    session.close().await
+        .context("error while closing DBus session")?;
 
     Ok(())
 }
@@ -166,12 +179,14 @@ async fn run_control(
     driver: ControlBackendConfig,
     common: CommonControlConfig,
     illum: watch::Receiver<Option<f64>>,
+    cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     match driver {
         ControlBackendConfig::Backlight(c) => linux_backlight(
             common,
             c,
             illum,
+            cancel,
         ).await,
         ControlBackendConfig::ThinkpadKeyboardBacklight => todo!(),
     }
@@ -181,6 +196,7 @@ async fn backlight_seeker<F>(
     common: &CommonControlConfig,
     mut current: f64,
     mut target_in: watch::Receiver<Option<f64>>,
+    cancel: CancellationToken,
     mut apply: impl FnMut(f64) -> F,
 )
     where F: Future<Output = ()>,
@@ -199,6 +215,9 @@ async fn backlight_seeker<F>(
     let slope: f64 = common.adjust_slope.unwrap_or(CommonControlConfig::DEFAULT_ADJUST_SLOPE);
     loop {
         select! {
+            _ = cancel.cancelled() => {
+                break;
+            }
             _ = interval.tick() => {
                 if let Some(in_progress) = &seek {
                     // How far off are we?
@@ -266,6 +285,7 @@ async fn linux_backlight(
     common: CommonControlConfig,
     cfg: BacklightConfig,
     illum: watch::Receiver<Option<f64>>,
+    cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let (bl, raw_start) = {
         let (mut bl, current) = brightr::use_specific_backlight(&cfg.device)?;
@@ -294,6 +314,7 @@ async fn linux_backlight(
         &common,
         start_mapped,
         illum,
+        cancel,
         |x| {
             let session = &session;
             let bl = &bl;
@@ -455,6 +476,7 @@ async fn iio_sensor_proxy(
 struct Remote {
     sender: tokio::sync::broadcast::Sender<f64>,
     adjust: f64,
+    cancel: CancellationToken,
 }
 
 #[interface(name = "com.cliffle.AmbientWalrus1")]
@@ -472,14 +494,17 @@ impl Remote {
     }
 
     async fn quit(&mut self) {
-        // TODO should be nicer than this
-        std::process::exit(0);
+        // Using eprintln rather than log here to ensure that it makes it out
+        // for debugging, regardless of log settings.
+        eprintln!("shutting down due to IPC quit signal");
+        self.cancel.cancel();
     }
 }
 
 fn adjust_stream(
     stream: impl Stream<Item = f64>,
     mut adjust: tokio::sync::broadcast::Receiver<f64>,
+    cancel: CancellationToken,
 ) -> impl Stream<Item = f64> {
     async_stream::stream! {
         let mut stream = pin!(stream);
@@ -487,6 +512,9 @@ fn adjust_stream(
         let mut last_value: Option<f64> = None;
         loop {
             select! {
+                _ = cancel.cancelled() => {
+                    break;
+                }
                 v = stream.next() => {
                     if let Some(v) = v {
                         last_value = Some(v);

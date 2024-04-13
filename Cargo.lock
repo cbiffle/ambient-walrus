@@ -41,6 +41,7 @@ dependencies = [
  "serde",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "toml",
  "xdg",
  "zbus",
