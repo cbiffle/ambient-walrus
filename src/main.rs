@@ -102,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
                     eprintln!("- {}", d.join("config.toml").display());
                 }
                 eprintln!("FYI: you can generate an example by running: ambientwalrus generate");
-                eprintln!("FYI: e.g. ambientwalrus generate > {}", main_path.display());
+                eprintln!("FYI: or to save it: ambientwalrus generate --overwrite");
                 bail!("ensure config is present/readable or override with -f/--config-file");
             }
         }
