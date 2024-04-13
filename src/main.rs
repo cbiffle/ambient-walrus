@@ -14,7 +14,7 @@ use log::{debug, trace, error};
 use logind_zbus::session::SessionProxy;
 use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
-use zbus::{Connection, proxy};
+use zbus::{Connection, proxy, interface};
 
 use crate::config::{Config, ControlBackendConfig, CommonControlConfig, MaxBehavior};
 
@@ -40,6 +40,23 @@ enum SubCmd {
     /// Generate an example config as a starting point. You will need to edit
     /// the results for your system by e.g. setting the right backlight device.
     Generate,
+    /// Send commands to a running instance.
+    Ipc {
+        #[clap(subcommand)]
+        ipc: IpcCmd,
+    },
+}
+
+#[derive(Parser)]
+enum IpcCmd {
+    /// Check if we can find and talk to an instance.
+    Ping,
+    /// Bias brightness adjustments up by the given factor (0-1).
+    Up { amount: f64 },
+    /// Bias brightness adjustments down by the given factor (0-1).
+    Down { amount: f64 },
+    /// Reset brightness adjustments to default.
+    ResetAdjustment,
 }
 
 // Use tokio for its convenient composition of state machines, but don't spin up
@@ -52,6 +69,8 @@ async fn main() -> anyhow::Result<()> {
     if let Some(cmd) = args.cmd {
         match cmd {
             SubCmd::Generate => return do_generate().await,
+            SubCmd::Ipc { ipc } => return do_ipc(ipc).await,
+
             SubCmd::Run => (),
         }
     }
@@ -82,6 +101,16 @@ async fn main() -> anyhow::Result<()> {
 
     debug!("{config:#?}");
 
+    let (adjust_send, adjust_recv) = tokio::sync::broadcast::channel(1);
+    let _session = zbus::connection::Builder::session()?
+        .name("com.cliffle.AmbientWalrus")?
+        .serve_at("/com/cliffle/AmbientWalrus", Remote {
+            sender: adjust_send,
+            adjust: 0.,
+        })?
+        .build()
+        .await?;
+
     let (illum_send, _illum_rx) = watch::channel(None);
     let mut join_set = JoinSet::default();
 
@@ -90,11 +119,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     join_set.spawn(async move {
-        let mut sensor_stream = pin!(run_sensor(config.sensor).await?);
+        let sensor_stream = run_sensor(config.sensor).await?;
+        let mut adjusted_stream = pin!(adjust_stream(sensor_stream, adjust_recv));
 
-        while let Some(sample) = sensor_stream.next().await {
-            trace!("sensor sample = {sample}");
-            if illum_send.send(Some(sample)).is_err() {
+        while let Some(sample) = adjusted_stream.next().await {
+            trace!("adjusted sample = {sample}");
+            if illum_send.send(Some(sample.clamp(0., 1.))).is_err() {
                 // All recipients have been closed
                 break;
             }
@@ -149,7 +179,7 @@ async fn backlight_seeker<F>(
     }
     let mut seek: Option<Seek> = None;
     // How close to the target we have to get before stopping.
-    let hyst = 0.1;
+    let hyst = 0.05;
     // What fraction of the full range per second we'll move.
     let slope: f64 = common.adjust_slope.unwrap_or(CommonControlConfig::DEFAULT_ADJUST_SLOPE);
     loop {
@@ -399,8 +429,101 @@ async fn iio_sensor_proxy(
                 trace!("raw sensor reading = {level} {unit}");
                 last = Some(level);
 
-                yield ((level - min) / (max - min)).clamp(0., 1.).powf(exponent);
+                let f = ((level - min) / (max - min)).clamp(0., 1.).powf(exponent);
+                trace!("scaled sensor reading = {f}");
+                yield f;
             }
         }
     })
+}
+
+struct Remote {
+    sender: tokio::sync::broadcast::Sender<f64>,
+    adjust: f64,
+}
+
+#[interface(name = "com.cliffle.AmbientWalrus1")]
+impl Remote {
+    async fn adjust_by(&mut self, amt: f64) {
+        self.adjust += amt;
+        trace!("adjustment = {}", self.adjust);
+        self.sender.send(self.adjust).ok();
+    }
+
+    async fn set_adjustment(&mut self, amt: f64) {
+        self.adjust = amt;
+        trace!("adjustment = {}", self.adjust);
+        self.sender.send(self.adjust).ok();
+    }
+}
+
+fn adjust_stream(
+    stream: impl Stream<Item = f64>,
+    mut adjust: tokio::sync::broadcast::Receiver<f64>,
+) -> impl Stream<Item = f64> {
+    async_stream::stream! {
+        let mut stream = pin!(stream);
+        let mut adjustment: f64 = 0.;
+        let mut last_value: Option<f64> = None;
+        loop {
+            select! {
+                v = stream.next() => {
+                    if let Some(v) = v {
+                        last_value = Some(v);
+                        yield v + adjustment;
+                    } else {
+                        // Stream shutting down.
+                        break;
+                    }
+                }
+                a = adjust.recv() => {
+                    match a {
+                        Ok(new_adjust) => {
+                            adjustment = new_adjust;
+                            if let Some(last) = last_value {
+                                trace!("last = {last}");
+                                yield last + adjustment;
+                            }
+                        }
+                        Err(_) => {
+                            // Adjustment shutting down, we will too.
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn do_ipc(ipc: IpcCmd) -> anyhow::Result<()> {
+    let conn = Connection::session().await?;
+    let proxy = RemoteProxy::new(&conn).await?;
+
+    match ipc {
+        IpcCmd::Ping => {
+            proxy.adjust_by(0.).await?;
+            println!("success!");
+        }
+        IpcCmd::Up { amount } => {
+            proxy.adjust_by(amount).await?;
+        }
+        IpcCmd::Down { amount } => {
+            proxy.adjust_by(-amount).await?;
+        }
+        IpcCmd::ResetAdjustment => {
+            proxy.set_adjustment(0.).await?;
+        }
+    }
+    Ok(())
+}
+
+#[proxy(
+    default_service = "com.cliffle.AmbientWalrus",
+    default_path = "/com/cliffle/AmbientWalrus",
+    interface = "com.cliffle.AmbientWalrus1",
+)]
+trait Remote {
+    async fn adjust_by(&self, amt: f64) -> zbus::Result<()>;
+    async fn set_adjustment(&self, amt: f64) -> zbus::Result<()>;
 }

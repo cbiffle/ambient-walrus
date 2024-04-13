@@ -23,6 +23,15 @@ mappings, chosen from the following types:
   root privileges, as long as it's run by a user logged in at display.
 - Linux `tpacpi` (Thinkpad ACPI) keyboard backlight (in progress).
 
+## IPC Interface
+
+The Walrus has an IPC interface that you can use to adjust its behavior. For
+example, if it has set the screen slightly dimmer than you prefer, you can send
+a command to adjust its decisions up slightly. The IPC interface is available
+over DBus, and the `ambientwalrus ipc` subcommand provides a convenient way of
+sending commands to a running copy of the Walrus. For more information, run
+`ambientwalrus ipc help`.
+
 ## Power and Wakes
 
 `ambient-walrus` tries not to wake the CPU when nothing is changing. Sensor
