@@ -10,7 +10,7 @@ adjustment to any number of _controls._
 ## Quickstart
 
 ```
-cargo run generate > ~/.config/ambientwalrus/config.toml
+cargo run generate --overwrite  # NOTE: will overwrite an existing config!
 cargo run
 ```
 

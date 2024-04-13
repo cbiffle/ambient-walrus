@@ -45,7 +45,10 @@ enum SubCmd {
     Run,
     /// Generate an example config as a starting point by attempting to detect
     /// your device's controls and sensors.
-    Generate,
+    Generate {
+        #[clap(long)]
+        overwrite: bool,
+    },
     /// Send commands to a running instance.
     Ipc {
         #[clap(subcommand)]
@@ -76,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
     if let Some(cmd) = args.cmd {
         match cmd {
-            SubCmd::Generate => return generate::run().await,
+            SubCmd::Generate { overwrite } => return generate::run(overwrite).await,
             SubCmd::Ipc { ipc } => return do_ipc(ipc).await,
 
             SubCmd::Run => (),
