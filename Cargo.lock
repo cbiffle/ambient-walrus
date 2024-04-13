@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "brightr"
 version = "0.1.0"
-source = "git+https://github.com/cbiffle/brightr#61dbeb72306d6afd33b10f15117c5c44092f211f"
+source = "git+https://github.com/cbiffle/brightr#1b029f5e8dbfbdb4c4f8b2c26642af36e74fad44"
 dependencies = [
  "logind-zbus",
  "thiserror",

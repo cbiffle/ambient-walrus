@@ -4,14 +4,14 @@
 
 mod config;
 
-use std::{path::PathBuf, time::Duration, pin::pin};
+use std::{path::PathBuf, time::Duration, pin::pin, future::Future};
 
 use anyhow::{Context, bail};
 use clap::Parser;
 use config::{BacklightConfig, CommonSensorConfig, SensorConfig, SensorBackendConfig};
 use futures::Stream;
 use log::{debug, trace, error};
-use logind_zbus::session::SessionProxyBlocking;
+use logind_zbus::session::SessionProxy;
 use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
 use zbus::{blocking::Connection, proxy};
@@ -125,12 +125,14 @@ async fn run_control(
     }
 }
 
-async fn backlight_seeker(
+async fn backlight_seeker<F>(
     common: &CommonControlConfig,
     mut current: f64,
     mut target_in: watch::Receiver<Option<f64>>,
-    mut apply: impl FnMut(f64),
-) {
+    mut apply: impl FnMut(f64) -> F,
+)
+    where F: Future<Output = ()>,
+{
     let mut interval = tokio::time::interval(Duration::from_secs_f64(1. / common.update_rate.unwrap_or(CommonControlConfig::DEFAULT_UPDATE_RATE)));
 
     struct Seek {
@@ -164,7 +166,7 @@ async fn backlight_seeker(
                             current = (in_progress.begin_value + t * slope).min(in_progress.target);
                         }
                         debug!("backlight = {current}");
-                        apply(current);
+                        apply(current).await;
                     }
                 } else {
                     debug!("resetting timer into future again");
@@ -223,9 +225,9 @@ async fn linux_backlight(
     };
 
     let conn = Connection::system()?;
-    let session = SessionProxyBlocking::builder(&conn)
+    let session = SessionProxy::builder(&conn.into())
         .path("/org/freedesktop/login1/session/auto")?
-        .build()?;
+        .build().await?;
 
     let max = f64::from(bl.max);
     let exponent = common.exponent.unwrap_or(CommonControlConfig::DEFAULT_EXPONENT);
@@ -241,37 +243,41 @@ async fn linux_backlight(
         start_mapped,
         illum,
         |x| {
-            let sample = {
-                let mut sample = x;
-                // Map input range to 0..1, applying our saturation behavior
-                if sample > input.hi {
-                    match common.max_behavior.unwrap_or_default() {
-                        MaxBehavior::Off => {
-                            if let Err(e) = brightr::set_brightness(&session, &bl, 0) {
-                                error!("failed to turn off backlight: {e:?}");
+            let session = &session;
+            let bl = &bl;
+            async move {
+                let sample = {
+                    let mut sample = x;
+                    // Map input range to 0..1, applying our saturation behavior
+                    if sample > input.hi {
+                        match common.max_behavior.unwrap_or_default() {
+                            MaxBehavior::Off => {
+                                if let Err(e) = brightr::async_set_brightness(&session, &bl, 0).await {
+                                    error!("failed to turn off backlight: {e:?}");
+                                }
+                                return;
                             }
-                            return;
-                        }
-                        MaxBehavior::Saturate => {
-                            sample = input.hi;
+                            MaxBehavior::Saturate => {
+                                sample = input.hi;
+                            }
                         }
                     }
+
+                    sample = (sample - input.lo) / (input.hi - input.lo);
+                    sample.clamp(0., 1.)
+                };
+
+                // Apply our output mapping.
+                let output = sample * (output.hi - output.lo) + output.lo;
+                trace!("backlight post-mapping = {output}");
+
+                let raw_output = (output.powf(exponent) * max).round() as u32;
+                trace!("backlight raw = {raw_output}");
+                // The max here is redundant but I'm sketchy about the floating point
+                // math
+                if let Err(e) = brightr::async_set_brightness(&session, &bl, u32::min(raw_output, bl.max)).await {
+                    error!("failed to set backlight: {e:?}");
                 }
-
-                sample = (sample - input.lo) / (input.hi - input.lo);
-                sample.clamp(0., 1.)
-            };
-
-            // Apply our output mapping.
-            let output = sample * (output.hi - output.lo) + output.lo;
-            trace!("backlight post-mapping = {output}");
-
-            let raw_output = (output.powf(exponent) * max).round() as u32;
-            trace!("backlight raw = {raw_output}");
-            // The max here is redundant but I'm sketchy about the floating point
-            // math
-            if let Err(e) = brightr::set_brightness(&session, &bl, u32::min(raw_output, bl.max)) {
-                error!("failed to set backlight: {e:?}");
             }
         },
     ).await;
