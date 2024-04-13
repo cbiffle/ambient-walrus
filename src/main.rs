@@ -18,6 +18,12 @@ use zbus::{Connection, proxy};
 
 use crate::config::{Config, ControlBackendConfig, CommonControlConfig, MaxBehavior};
 
+/// The Ambient Walrus lurks in the background, adjusting the lighting to suit
+/// the mood.
+///
+/// This is a simple program for controlling the brightness of display
+/// backlights and supplementary lighting based on the output of ambient light
+/// sensors.
 #[derive(Parser)]
 struct AmbientWalrus {
     #[clap(short = 'f', long)]
@@ -31,7 +37,8 @@ struct AmbientWalrus {
 enum SubCmd {
     /// Run the walrus (default if no command is given).
     Run,
-    /// Generate an example config as a starting point.
+    /// Generate an example config as a starting point. You will need to edit
+    /// the results for your system by e.g. setting the right backlight device.
     Generate,
 }
 
