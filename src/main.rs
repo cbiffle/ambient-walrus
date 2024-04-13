@@ -14,7 +14,7 @@ use log::{debug, trace, error};
 use logind_zbus::session::SessionProxy;
 use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
-use zbus::{blocking::Connection, proxy};
+use zbus::{Connection, proxy};
 
 use crate::config::{Config, ControlBackendConfig, CommonControlConfig, MaxBehavior};
 
@@ -224,8 +224,8 @@ async fn linux_backlight(
         (bl, current)
     };
 
-    let conn = Connection::system()?;
-    let session = SessionProxy::builder(&conn.into())
+    let conn = Connection::system().await?;
+    let session = SessionProxy::builder(&conn)
         .path("/org/freedesktop/login1/session/auto")?
         .build().await?;
 
@@ -313,8 +313,8 @@ trait IioSensors {
 async fn iio_sensor_proxy(
     common: CommonSensorConfig,
 ) -> anyhow::Result<impl Stream<Item = f64>> {
-    let conn = Connection::system()?;
-    let p = IioSensorsProxy::new(&conn.into()).await?;
+    let conn = Connection::system().await?;
+    let p = IioSensorsProxy::new(&conn).await?;
 
     if !p.has_ambient_light().await? {
         bail!("no ambient light sensor supported");
