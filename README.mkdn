@@ -47,6 +47,9 @@ you probably want to place it in `~/.config/ambientwalrus/config.toml` or, to
 share between users, `/etc/xdg/ambientwalrus/config.toml`. But you can also
 specify a different location using the `-f`/`--config-file` flag.
 
+You can generate a basic config by running `ambientwalrus generate`. You will
+need to edit the result to match your system.
+
 Here is a minimal configuration file that drives a single backlight device from
 a single Industrial I/O ambient light sensor:
 
