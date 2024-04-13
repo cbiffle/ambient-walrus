@@ -1,10 +1,12 @@
-use log::{error, trace};
+use std::fs;
+
+use log::{error, trace, warn};
 use logind_zbus::session::SessionProxy;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use zbus::Connection;
 
-use crate::config::{CommonControlConfig, BacklightConfig, MaxBehavior};
+use crate::config::{CommonControlConfig, BacklightConfig, MaxBehavior, ControlConfig, ControlBackendConfig};
 
 pub async fn run(
     common: CommonControlConfig,
@@ -82,4 +84,38 @@ pub async fn run(
     Ok(())
 }
 
+pub async fn try_generate() -> Vec<(String, ControlConfig)> {
+    let mut controls = vec![];
 
+    let Ok(dir) = fs::read_dir("/sys/class/backlight") else {
+        warn!("could not read /sys/class/backlight/");
+        return controls;
+    };
+    for dirent in dir {
+        let Ok(dirent) = dirent else {
+            warn!("error listing directory /sys/class/backlight");
+            return controls;
+        };
+
+        let path = dirent.path();
+        let Some(name) = path.file_name() else {
+            warn!("can't get name for path: {}", path.display());
+            continue;
+        };
+        let Some(name) = name.to_str() else {
+            warn!("can't handle non-UTF8 device name: {name:?}");
+            continue;
+        };
+
+        let key = format!("backlight_{name}");
+        controls.push((key, ControlConfig {
+            driver: ControlBackendConfig::Backlight(BacklightConfig {
+                device: name.to_owned(),
+                raw_max: None,
+            }),
+            common: CommonControlConfig::default(),
+        }));
+    }
+
+    controls
+}

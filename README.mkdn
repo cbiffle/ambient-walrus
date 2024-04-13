@@ -7,6 +7,24 @@ device in changing lighting conditions.
 The Walrus monitors some number of _sensors_ (currently 1) and applies
 adjustment to any number of _controls._
 
+## Quickstart
+
+```
+cargo run generate > ~/.config/ambientwalrus/config.toml
+cargo run
+```
+
+This will drive your backlight until you stop it. To find out more about command
+line options and such, run:
+
+```
+cargo run help
+```
+
+If you like the results, install the program using `cargo install --path .
+--locked`.
+
+
 ## Sensor Support
 
 Currently supports a single input sensor, chosen from the following types:
@@ -32,6 +50,14 @@ over DBus, and the `ambientwalrus ipc` subcommand provides a convenient way of
 sending commands to a running copy of the Walrus. For more information, run
 `ambientwalrus ipc help`.
 
+Specifically, these two commands are useful to bind to the "brightness adjust"
+keys on a keyboard:
+
+```
+ambientwalrus ipc up 0.1
+ambientwalrus ipc down 0.1
+```
+
 ## Power and Wakes
 
 `ambient-walrus` tries not to wake the CPU when nothing is changing. Sensor
@@ -56,23 +82,9 @@ you probably want to place it in `~/.config/ambientwalrus/config.toml` or, to
 share between users, `/etc/xdg/ambientwalrus/config.toml`. But you can also
 specify a different location using the `-f`/`--config-file` flag.
 
-You can generate a basic config by running `ambientwalrus generate`. You will
-need to edit the result to match your system.
-
-Here is a minimal configuration file that drives a single backlight device from
-a single Industrial I/O ambient light sensor:
-
-```toml
-[sensor]
-driver = {kind = "iio-sensor-proxy"}
-
-[controls.backlight]
-driver = {kind = "backlight", device = "amdgpu_bl1"}
-```
-
-(Note that you may need to adjust the name `amdgpu_bl1` for your machine. You
-can find the names of backlight-class devices on Linux by running `ls
-/sys/class/backlight`.)
+You can generate a basic config by running `ambientwalrus generate`. This will
+attempt to detect your devices and produce a valid starting configuration. You
+may need to edit the results to tweak them to your liking.
 
 Here's a full description of the configuration options:
 

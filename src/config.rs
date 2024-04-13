@@ -3,28 +3,6 @@ use serde::{Deserialize, Serialize};
 
 const fn one() -> f64 { 1. }
 
-pub fn make_example() -> Config {
-    Config {
-        sensor: SensorConfig {
-            driver: SensorBackendConfig::IioSensorsProxy,
-            common: CommonSensorConfig {
-                input: None,
-                poll_hz: None,
-                exponent: None,
-            },
-        },
-        controls: [
-            ("backlight".to_string(), ControlConfig {
-                driver: ControlBackendConfig::Backlight(BacklightConfig {
-                    device: "my_backlight_device".to_string(),
-                    raw_max: None,
-                }),
-                common: CommonControlConfig::default(),
-            }),
-        ].into_iter().collect(),
-    }
-}
-
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -50,7 +28,7 @@ pub enum SensorBackendConfig {
     IioSensorsProxy,
 }
 
-#[derive(Copy, Clone, Deserialize, Serialize, Debug)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug, Default)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct CommonSensorConfig {

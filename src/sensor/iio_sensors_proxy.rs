@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use anyhow::bail;
 use futures::Stream;
-use log::{error, trace};
+use log::{error, trace, warn};
 use tokio::select;
 use tokio_stream::StreamExt;
 use zbus::{Connection, proxy};
 
-use crate::config::CommonSensorConfig;
+use crate::config::{CommonSensorConfig, SensorConfig, SensorBackendConfig, OptRangeConfig};
 
 pub async fn run(
     common: CommonSensorConfig,
@@ -114,4 +114,44 @@ trait IioSensors {
 
     fn claim_light(&self) -> zbus::fdo::Result<()>;
     fn release_light(&self) -> zbus::fdo::Result<()>;
+}
+
+pub async fn try_generate() -> Option<SensorConfig> {
+    let conn = Connection::system().await.ok()?;
+    let p = IioSensorsProxy::new(&conn).await.ok()?;
+
+    let Ok(flag) = p.has_ambient_light().await else {
+        warn!("iio-sensors-proxy not found");
+        return None;
+    };
+
+    if !flag {
+        warn!("iio-sensors-proxy does not have ambient light support");
+        return None;
+    }
+
+    let mut config = SensorConfig {
+        driver: SensorBackendConfig::IioSensorsProxy,
+        common: CommonSensorConfig {
+            poll_hz: Some(0.1),
+            ..CommonSensorConfig::default()
+        },
+    };
+
+    // Check if we need to provide an explicit input max.
+    let Ok(unit) = p.light_level_unit().await else {
+        warn!("iio-sensors-proxy not found");
+        return None;
+    };
+
+    if unit == "lux" {
+        config.common.input = Some(OptRangeConfig {
+            lo: None,
+            // Assume the backlight is equivalent to about 1 klux illumination,
+            // somewhat arbitrarily.
+            hi: Some(1_000.),
+        });
+    }
+
+    Some(config)
 }
