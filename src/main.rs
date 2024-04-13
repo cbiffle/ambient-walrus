@@ -289,7 +289,7 @@ async fn linux_backlight(
                     if sample > input.hi {
                         match common.max_behavior.unwrap_or_default() {
                             MaxBehavior::Off => {
-                                if let Err(e) = brightr::async_set_brightness(&session, &bl, 0).await {
+                                if let Err(e) = brightr::async_set_brightness(session, bl, 0).await {
                                     error!("failed to turn off backlight: {e:?}");
                                 }
                                 return;
@@ -312,7 +312,7 @@ async fn linux_backlight(
                 trace!("backlight raw = {raw_output}");
                 // The max here is redundant but I'm sketchy about the floating point
                 // math
-                if let Err(e) = brightr::async_set_brightness(&session, &bl, u32::min(raw_output, bl.max)).await {
+                if let Err(e) = brightr::async_set_brightness(session, bl, u32::min(raw_output, bl.max)).await {
                     error!("failed to set backlight: {e:?}");
                 }
             }
