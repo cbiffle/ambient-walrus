@@ -6,7 +6,7 @@ const fn one() -> f64 { 1. }
 pub fn make_example() -> Config {
     Config {
         sensor: SensorConfig {
-            driver: SensorBackendConfig::IioSensorProxy,
+            driver: SensorBackendConfig::IioSensorsProxy,
             common: CommonSensorConfig {
                 input: None,
                 poll_hz: None,
@@ -46,7 +46,8 @@ pub struct SensorConfig {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub enum SensorBackendConfig {
-    IioSensorProxy,
+    #[serde(alias = "iio-sensor-proxy")]
+    IioSensorsProxy,
 }
 
 #[derive(Copy, Clone, Deserialize, Serialize, Debug)]
