@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 mod config;
+mod ipc_client;
+mod ipc_server;
 
 use std::{path::PathBuf, time::Duration, pin::pin, future::Future};
 
@@ -15,9 +17,10 @@ use logind_zbus::session::SessionProxy;
 use tokio::{sync::watch, task::JoinSet, select, time::Instant};
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
-use zbus::{Connection, proxy, interface};
+use zbus::{Connection, proxy};
 
 use crate::config::{Config, ControlBackendConfig, CommonControlConfig, MaxBehavior};
+use crate::ipc_client::RemoteProxy;
 
 /// The Ambient Walrus lurks in the background, adjusting the lighting to suit
 /// the mood.
@@ -140,11 +143,10 @@ async fn main() -> anyhow::Result<()> {
     // any reason other than providing a bogus name/path string.
     let session = zbus::connection::Builder::session().expect("canned session name can't be parsed!?")
         .name("com.cliffle.AmbientWalrus").expect("constant name can't be parsed!?")
-        .serve_at("/com/cliffle/AmbientWalrus", Remote {
-            sender: adjust_send,
-            adjust: 0.,
+        .serve_at("/com/cliffle/AmbientWalrus", ipc_server::Remote::new(
+            adjust_send,
             cancel,
-        }).expect("constant path can't be parsed!?")
+        )).expect("constant path can't be parsed!?")
         .build()
         .await
         .context("can't start DBus server, is there already an instance running?\n\
@@ -473,34 +475,6 @@ async fn iio_sensor_proxy(
     })
 }
 
-struct Remote {
-    sender: tokio::sync::broadcast::Sender<f64>,
-    adjust: f64,
-    cancel: CancellationToken,
-}
-
-#[interface(name = "com.cliffle.AmbientWalrus1")]
-impl Remote {
-    async fn adjust_by(&mut self, amt: f64) {
-        self.adjust += amt;
-        trace!("adjustment = {}", self.adjust);
-        self.sender.send(self.adjust).ok();
-    }
-
-    async fn set_adjustment(&mut self, amt: f64) {
-        self.adjust = amt;
-        trace!("adjustment = {}", self.adjust);
-        self.sender.send(self.adjust).ok();
-    }
-
-    async fn quit(&mut self) {
-        // Using eprintln rather than log here to ensure that it makes it out
-        // for debugging, regardless of log settings.
-        eprintln!("shutting down due to IPC quit signal");
-        self.cancel.cancel();
-    }
-}
-
 fn adjust_stream(
     stream: impl Stream<Item = f64>,
     mut adjust: tokio::sync::broadcast::Receiver<f64>,
@@ -594,15 +568,4 @@ async fn do_ipc_core(proxy: RemoteProxy<'_>, ipc: IpcCmd) -> zbus::Result<()> {
             proxy.quit().await
         }
     }
-}
-
-#[proxy(
-    default_service = "com.cliffle.AmbientWalrus",
-    default_path = "/com/cliffle/AmbientWalrus",
-    interface = "com.cliffle.AmbientWalrus1",
-)]
-trait Remote {
-    async fn adjust_by(&self, amt: f64) -> zbus::Result<()>;
-    async fn set_adjustment(&self, amt: f64) -> zbus::Result<()>;
-    async fn quit(&self) -> zbus::Result<()>;
 }
