@@ -46,7 +46,7 @@ async fn backlight_seeker<F>(
     }
     let mut seek: Option<Seek> = None;
     // How close to the target we have to get before stopping.
-    let hyst = 0.05;
+    let hyst = 0.01;
     // What fraction of the full range per second we'll move.
     let slope: f64 = common.adjust_slope.unwrap_or(CommonControlConfig::DEFAULT_ADJUST_SLOPE);
     loop {
