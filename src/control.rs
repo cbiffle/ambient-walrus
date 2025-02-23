@@ -3,7 +3,7 @@ pub mod linux_backlight;
 use std::time::Duration;
 
 use futures::Future;
-use log::debug;
+use log::{debug, trace};
 use tokio::{sync::watch, time::Instant, select};
 use tokio_util::sync::CancellationToken;
 
@@ -72,7 +72,7 @@ async fn backlight_seeker<F>(
                         } else {
                             current = (in_progress.begin_value + t * slope).min(in_progress.target);
                         }
-                        debug!("backlight = {current}");
+                        trace!("backlight = {current}");
                         apply(current).await;
                     }
                 } else {
